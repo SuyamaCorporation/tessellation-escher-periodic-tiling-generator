@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>エッシャー風テッセレーション生成</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 min-h-screen flex flex-col items-center p-4">
+<div class="w-full max-w-2xl">
+  <h1 class="text-xl font-bold text-indigo-400 text-center mb-1">エッシャー風テッセレーション</h1>
+  <p class="text-gray-500 text-center text-xs mb-3">周期的タイリング生成 ― p1 / p4 / p6 対称性</p>
+
+  <div class="grid md:grid-cols-2 gap-3 mb-3">
+    <!-- Draw pad -->
+    <div>
+      <p class="text-gray-400 text-xs mb-1 text-center">基本タイルを描画（クリック＆ドラッグ）</p>
+      <canvas id="tile-canvas" class="w-full rounded-xl border-2 border-indigo-700 cursor-crosshair" width="200" height="200" style="background:#111;"></canvas>
+      <div class="flex gap-1 mt-1">
+        <button onclick="clearTile()" class="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 py-1 rounded text-xs">クリア</button>
+        <button onclick="loadPreset('flower')" class="flex-1 bg-indigo-900 hover:bg-indigo-800 text-indigo-300 py-1 rounded text-xs">花</button>
+        <button onclick="loadPreset('cross')" class="flex-1 bg-indigo-900 hover:bg-indigo-800 text-indigo-300 py-1 rounded text-xs">十字</button>
+        <button onclick="loadPreset('wave')" class="flex-1 bg-indigo-900 hover:bg-indigo-800 text-indigo-300 py-1 rounded text-xs">波</button>
+      </div>
+    </div>
+
+    <!-- Options + preview trigger -->
+    <div class="space-y-2">
+      <div>
+        <label class="text-gray-400 text-xs block mb-1" for="sym-select">対称性:</label>
+        <select id="sym-select" class="w-full bg-gray-800 text-white rounded px-2 py-1 text-sm" aria-label="対称性グループ">
+          <option value="p1">p1 (平行移動のみ)</option>
+          <option value="p4" selected>p4 (4回対称回転)</option>
+          <option value="p6">p6 (6回対称回転)</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-gray-400 text-xs block mb-1" for="palette-select">カラーパレット:</label>
+        <select id="palette-select" class="w-full bg-gray-800 text-white rounded px-2 py-1 text-sm" aria-label="カラーパレット">
+          <option value="escher">エッシャー (黒白)</option>
+          <option value="warm">ウォーム</option>
+          <option value="cool">クール</option>
+          <option value="rainbow">レインボー</option>
+        </select>
+      </div>
+      <button onclick="generateTiling()" class="w-full bg-indigo-700 hover:bg-indigo-600 text-white py-2 rounded-xl font-bold text-sm">🎨 タイリング生成</button>
+    </div>
+  </div>
+
+  <canvas id="output-canvas" class="w-full rounded-xl border border-gray-700" width="600" height="400" style="background:#111;"></canvas>
+</div>
+
+<script>
+const tileCanvas = document.getElementById('tile-canvas');
+const tileCtx = tileCanvas.getContext('2d');
+const TW = 200, TH = 200;
+
+const outCanvas = document.getElementById('output-canvas');
+const outCtx = outCanvas.getContext('2d');
+const OW = 600, OH = 400;
+
+let drawing = false;
+let paths = []; // array of paths [{color, points:[{x,y}]}]
+let currentPath = null;
+let currentColor = '#a0a0ff';
+const colorPicker = ['#8888ff','#ff8866','#66ff88','#ffee66','#ff66cc','#66ccff','#ffffff','#ffaa44'];
+let colorIdx = 0;
+
+tileCanvas.addEventListener('mousedown', e => {
+  drawing = true;
+  colorIdx = (colorIdx + 1) % colorPicker.length;
+  currentColor = colorPicker[colorIdx];
+  const r = tileCanvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * TW / r.width;
+  const y = (e.clientY - r.top) * TH / r.height;
+  currentPath = { color: currentColor, points: [{x, y}] };
+  paths.push(currentPath);
+  redrawTile();
+});
+
+tileCanvas.addEventListener('mousemove', e => {
+  if (!drawing) return;
+  const r = tileCanvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * TW / r.width;
+  const y = (e.clientY - r.top) * TH / r.height;
+  currentPath.points.push({x, y});
+  redrawTile();
+});
+
+tileCanvas.addEventListener('mouseup', () => { drawing = false; currentPath = null; });
+tileCanvas.addEventListener('mouseleave', () => { drawing = false; });
+
+// Touch support
+tileCanvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const ev = new MouseEvent('mousedown', { clientX: touch.clientX, clientY: touch.clientY });
+  tileCanvas.dispatchEvent(ev);
+});
+tileCanvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const ev = new MouseEvent('mousemove', { clientX: touch.clientX, clientY: touch.clientY });
+  tileCanvas.dispatchEvent(ev);
+});
+tileCanvas.addEventListener('touchend', e => { e.preventDefault(); tileCanvas.dispatchEvent(new MouseEvent('mouseup')); });
+
+function redrawTile() {
+  tileCtx.fillStyle = '#111';
+  tileCtx.fillRect(0, 0, TW, TH);
+  tileCtx.strokeStyle = '#333';
+  tileCtx.lineWidth = 1;
+  tileCtx.strokeRect(0, 0, TW, TH);
+  paths.forEach(path => {
+    if (path.points.length < 2) return;
+    tileCtx.beginPath();
+    tileCtx.moveTo(path.points[0].x, path.points[0].y);
+    for (let i = 1; i < path.points.length; i++) tileCtx.lineTo(path.points[i].x, path.points[i].y);
+    tileCtx.strokeStyle = path.color;
+    tileCtx.lineWidth = 3;
+    tileCtx.lineCap = 'round';
+    tileCtx.lineJoin = 'round';
+    tileCtx.stroke();
+  });
+}
+
+function clearTile() {
+  paths = [];
+  redrawTile();
+}
+
+function loadPreset(type) {
+  paths = [];
+  if (type === 'flower') {
+    for (let i = 0; i < 6; i++) {
+      const angle = i * Math.PI / 3;
+      const path = { color: colorPicker[i % colorPicker.length], points: [] };
+      const cx = TW/2, cy = TH/2;
+      for (let t = 0; t <= 1; t += 0.05) {
+        const r = 60 * Math.sin(t * Math.PI);
+        path.points.push({
+          x: cx + r * Math.cos(angle + t * Math.PI/3),
+          y: cy + r * Math.sin(angle + t * Math.PI/3),
+        });
+      }
+      paths.push(path);
+    }
+  } else if (type === 'cross') {
+    paths = [
+      { color:'#8888ff', points:[{x:TW/2,y:20},{x:TW/2,y:TH-20}] },
+      { color:'#ff8866', points:[{x:20,y:TH/2},{x:TW-20,y:TH/2}] },
+      { color:'#66ff88', points:[{x:30,y:30},{x:TW-30,y:TH-30}] },
+      { color:'#ffee66', points:[{x:TW-30,y:30},{x:30,y:TH-30}] },
+    ];
+  } else if (type === 'wave') {
+    const path = { color:'#66ccff', points:[] };
+    for (let x = 0; x <= TW; x += 3) {
+      path.points.push({ x, y: TH/2 + 60 * Math.sin(x/TW * Math.PI * 2) });
+    }
+    paths.push(path);
+    const path2 = { color:'#ff66cc', points:[] };
+    for (let x = 0; x <= TW; x += 3) {
+      path2.points.push({ x, y: TH/2 + 60 * Math.cos(x/TW * Math.PI * 2 + 1) });
+    }
+    paths.push(path2);
+  }
+  redrawTile();
+}
+
+function getPalette(mode) {
+  switch(mode) {
+    case 'warm': return ['#ff8844','#ffcc66','#ff6688','#ffaa44'];
+    case 'cool': return ['#4488ff','#44ccff','#8844ff','#44ffcc'];
+    case 'rainbow': return ['#ff4444','#ff8844','#ffee44','#44ee44','#4488ff','#8844ff'];
+    default: return ['#ffffff','#000000'];
+  }
+}
+
+function generateTiling() {
+  const sym = document.getElementById('sym-select').value;
+  const paletteMode = document.getElementById('palette-select').value;
+  const palette = getPalette(paletteMode);
+  const tileSize = 60;
+
+  outCtx.fillStyle = '#111';
+  outCtx.fillRect(0, 0, OW, OH);
+
+  const cols = Math.ceil(OW / tileSize) + 2;
+  const rows = Math.ceil(OH / tileSize) + 2;
+
+  for (let row = -1; row < rows; row++) {
+    for (let col = -1; col < cols; col++) {
+      const baseX = col * tileSize;
+      const baseY = row * tileSize;
+      const colorA = palette[(row + col) % palette.length];
+      const colorB = palette[(row + col + 1) % palette.length];
+
+      outCtx.save();
+      outCtx.translate(baseX, baseY);
+
+      // Background fill
+      outCtx.fillStyle = colorB;
+      outCtx.fillRect(0, 0, tileSize, tileSize);
+
+      const rots = sym === 'p1' ? [0] : sym === 'p4' ? [0, Math.PI/2, Math.PI, 3*Math.PI/2] : [0, Math.PI/3, 2*Math.PI/3, Math.PI, 4*Math.PI/3, 5*Math.PI/3];
+
+      rots.forEach((rot, ri) => {
+        outCtx.save();
+        outCtx.translate(tileSize/2, tileSize/2);
+        outCtx.rotate(rot);
+        outCtx.scale(tileSize/TW, tileSize/TH);
+        outCtx.translate(-TW/2, -TH/2);
+
+        const col_a = paletteMode === 'rainbow' ? palette[ri % palette.length] : colorA;
+        paths.forEach(path => {
+          if (path.points.length < 2) return;
+          outCtx.beginPath();
+          outCtx.moveTo(path.points[0].x, path.points[0].y);
+          for (let i = 1; i < path.points.length; i++) outCtx.lineTo(path.points[i].x, path.points[i].y);
+          outCtx.strokeStyle = paletteMode === 'escher' ? (ri % 2 === 0 ? '#fff' : '#000') : col_a;
+          outCtx.lineWidth = 2 / (tileSize/TW);
+          outCtx.lineCap = 'round';
+          outCtx.stroke();
+        });
+        outCtx.restore();
+      });
+      outCtx.restore();
+    }
+  }
+}
+
+// Init
+loadPreset('flower');
+generateTiling();
+</script>
+</body>
+</html>
